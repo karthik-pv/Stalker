@@ -1,0 +1,11 @@
+.opencode/
+.swarm/
+node_modules/
+output/
+.env
+activities.json
+__pycache__/
+*.pyc
+seed-dummy-data.js
+.temp/
+config.toml

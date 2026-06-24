@@ -1,0 +1,19 @@
+{
+  "name": "activity-tracker",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "setup": "node scripts/setup-db.js",
+    "reset": "node scripts/reset-db.js",
+    "seed-activities": "node scripts/seed-activities.js",
+    "seed-dummy": "node scripts/seed-dummy-data.js",
+    "serve": "supabase functions serve",
+    "deploy": "supabase functions deploy telegram-webhook",
+    "set-webhook": "node scripts/set-webhook.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.53.0",
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.0"
+  }
+}
