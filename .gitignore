@@ -9,3 +9,6 @@ __pycache__/
 seed-dummy-data.js
 .temp/
 config.toml
+Stalker.exe
+DailyReport.spec
+build/
