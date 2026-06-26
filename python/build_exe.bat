@@ -12,6 +12,7 @@ pyinstaller --onefile --name "DailyReport" --console ^
   --collect-all supabase ^
   --collect-all dotenv ^
   --collect-all requests ^
+  --collect-all table2ascii ^
   generate_daily_report.py
 
 echo.

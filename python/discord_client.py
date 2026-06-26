@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
+from table2ascii import table2ascii as t2a, PresetStyle
 
 from config import DISCORD_WEBHOOK_URL
 
@@ -21,17 +22,22 @@ def send_to_discord(image_path: str, day: datetime, sessions: list):
     date_str = day.strftime("%Y-%m-%d")
     message = f"Daily Activity Report - {date_str}"
 
-    # Collect descriptions
-    descriptions = []
+    # Collect descriptions into a table
+    body = []
     for s in sessions:
         desc = s.get("description")
         act = s.get("activities")
         if desc and act:
             name = act.get("display_name", "Unknown")
-            descriptions.append(f"{name} - {desc}")
+            body.append([name, desc])
 
-    if descriptions:
-        message += "\n" + "\n".join(descriptions)
+    if body:
+        table = t2a(
+            header=["Activity", "Description"],
+            body=body,
+            style=PresetStyle.thin_compact,
+        )
+        message += f"\n```\n{table}\n```"
 
     sent = False
     try:

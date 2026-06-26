@@ -27,8 +27,18 @@ def render_timeline(sessions: list, day: datetime, output_path: str):
         label = f"{h:02d}:00" if h < 24 else "24:00"
         ax.text(h, -0.08, label, ha="center", va="top", fontsize=8, color="#aaaaaa")
 
+    # Sort sessions by created_at ascending so that when segments overlap,
+    # the activity with the latest created_at is drawn last (on top).
+    def _created_at_key(session):
+        raw = session.get("created_at")
+        if raw:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return datetime.min
+
+    sorted_sessions = sorted(sessions, key=_created_at_key)
+
     # Draw each session as a colored segment
-    for session in sessions:
+    for session in sorted_sessions:
         activity = session.get("activities")
         if not activity:
             continue
@@ -43,6 +53,11 @@ def render_timeline(sessions: list, day: datetime, output_path: str):
         start_hour = (
             started_at.hour + started_at.minute / 60.0 + started_at.second / 3600.0
         )
+
+        # If the session started on a previous day, clamp start to midnight (0.0)
+        # so only the portion overlapping this day is drawn.
+        if started_at.date() < day.date():
+            start_hour = 0.0
 
         if ended_at_raw:
             ended_at = datetime.fromisoformat(
