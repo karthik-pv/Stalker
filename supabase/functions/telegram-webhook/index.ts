@@ -121,61 +121,28 @@ async function sendStopKeyboard(chatId: string | number, activityName: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Repair mode: time selection keyboards
+// Repair mode: timestamp parsing
 // ---------------------------------------------------------------------------
 
-// Hour buttons: 0-23 in rows of 6
-function buildHourKeyboard(): { inline_keyboard: { text: string; callback_data: string }[][] } {
-  const rows: { text: string; callback_data: string }[][] = [];
-  for (let h = 0; h < 24; h += 6) {
-    const row: { text: string; callback_data: string }[] = [];
-    for (let i = h; i < h + 6 && i < 24; i++) {
-      row.push({ text: `${i}:00`, callback_data: `r_hour:${i}` });
-    }
-    rows.push(row);
-  }
-  rows.push([{ text: "Cancel", callback_data: "r_cancel" }]);
-  return { inline_keyboard: rows };
+const TIMESTAMP_PROMPT =
+  "Enter timestamps in 24-hour format:\n`hh:mm - hh:mm`\n(e.g. `7:40 - 8:45`)";
+
+interface ParsedTimestamps {
+  startHour: number;
+  startMin: number;
+  endHour: number;
+  endMin: number;
 }
 
-// Minute buttons: 0, 15, 30, 45
-function buildMinuteKeyboard(hour: number): { inline_keyboard: { text: string; callback_data: string }[][] } {
-  const rows: { text: string; callback_data: string }[][] = [];
-  const row: { text: string; callback_data: string }[] = [];
-  for (const m of [0, 15, 30, 45]) {
-    row.push({ text: `${hour}:${m.toString().padStart(2, "0")}`, callback_data: `r_min:${hour}:${m}` });
-  }
-  rows.push(row);
-  rows.push([{ text: "Cancel", callback_data: "r_cancel" }]);
-  return { inline_keyboard: rows };
-}
-
-// Duration buttons: various options
-function buildDurationKeyboard(): { inline_keyboard: { text: string; callback_data: string }[][] } {
-  const durations = [
-    { label: "15m", mins: 15 },
-    { label: "30m", mins: 30 },
-    { label: "45m", mins: 45 },
-    { label: "1h", mins: 60 },
-    { label: "1.5h", mins: 90 },
-    { label: "2h", mins: 120 },
-    { label: "3h", mins: 180 },
-    { label: "4h", mins: 240 },
-    { label: "5h", mins: 300 },
-    { label: "6h", mins: 360 },
-    { label: "7h", mins: 420 },
-    { label: "8h", mins: 480 },
-  ];
-  const rows: { text: string; callback_data: string }[][] = [];
-  for (let i = 0; i < durations.length; i += 4) {
-    const row: { text: string; callback_data: string }[] = [];
-    for (let j = i; j < i + 4 && j < durations.length; j++) {
-      row.push({ text: durations[j].label, callback_data: `r_dur:${durations[j].mins}` });
-    }
-    rows.push(row);
-  }
-  rows.push([{ text: "Cancel", callback_data: "r_cancel" }]);
-  return { inline_keyboard: rows };
+function parseTimestamps(text: string): ParsedTimestamps | null {
+  const match = text.trim().match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const startHour = parseInt(match[1], 10);
+  const startMin = parseInt(match[2], 10);
+  const endHour = parseInt(match[3], 10);
+  const endMin = parseInt(match[4], 10);
+  if (startHour > 23 || startMin > 59 || endHour > 23 || endMin > 59) return null;
+  return { startHour, startMin, endHour, endMin };
 }
 
 // ---------------------------------------------------------------------------
@@ -319,54 +286,28 @@ async function handleRepairActivityCallback(
     });
     await sendMessage(chatId, `Send description for ${activity.display_name}`);
   } else {
-    // Ask for start time
+    // Ask for timestamps as text
     await setUserState(telegramUserId, {
       pending_activity_id: activity.id,
       awaiting_description: false,
       repair_mode: true,
-      repair_step: "select_hour",
+      repair_step: "awaiting_timestamps",
     });
-    await sendMessage(chatId, `Repair: ${activity.display_name}\nSelect start hour:`, buildHourKeyboard());
+    await sendMessage(chatId, `Repair: ${activity.display_name}\n${TIMESTAMP_PROMPT}`);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Repair mode: time/duration selection
+// Repair mode: timestamp text handler
 // ---------------------------------------------------------------------------
 
-async function handleRepairHourCallback(
+async function handleRepairTimestamps(
   chatId: number,
   telegramUserId: string,
-  hour: number,
-  callbackQueryId: string,
+  text: string,
 ) {
-  await answerCallbackQuery(callbackQueryId);
-  await setUserState(telegramUserId, { repair_step: "select_minute", repair_hour: hour });
-  await sendMessage(chatId, `Start hour: ${hour}:00\nSelect minutes:`, buildMinuteKeyboard(hour));
-}
-
-async function handleRepairMinuteCallback(
-  chatId: number,
-  telegramUserId: string,
-  hour: number,
-  minute: number,
-  callbackQueryId: string,
-) {
-  await answerCallbackQuery(callbackQueryId);
-  await setUserState(telegramUserId, { repair_step: "select_duration", repair_hour: hour, repair_minute: minute });
-  await sendMessage(chatId, `Start time: ${hour}:${minute.toString().padStart(2, "0")}\nSelect duration:`, buildDurationKeyboard());
-}
-
-async function handleRepairDurationCallback(
-  chatId: number,
-  telegramUserId: string,
-  durationMins: number,
-  callbackQueryId: string,
-) {
-  await answerCallbackQuery(callbackQueryId);
-
   const state = await getUserState(telegramUserId);
-  if (!state || !state.pending_activity_id || state.repair_hour === null || state.repair_minute === null) {
+  if (!state || !state.pending_activity_id) {
     await sendMessage(chatId, "Repair state lost. Please start again.");
     await clearUserState(telegramUserId);
     await sendActivityKeyboard(chatId, true);
@@ -381,8 +322,15 @@ async function handleRepairDurationCallback(
     return;
   }
 
-  // Calculate start and end times for today (IST) at the selected hour:minute
-  // We store UTC in DB; IST = UTC + 5:30
+  const parsed = parseTimestamps(text);
+  if (!parsed) {
+    await sendMessage(chatId, `Invalid format. ${TIMESTAMP_PROMPT}`);
+    return;
+  }
+
+  const { startHour, startMin, endHour, endMin } = parsed;
+
+  // Calculate start and end times for today (IST) -> UTC
   const IST_OFFSET_MS = 5.5 * 3600000;
   const now = new Date();
   const istNow = new Date(now.getTime() + IST_OFFSET_MS);
@@ -390,9 +338,17 @@ async function handleRepairDurationCallback(
   const istMonth = istNow.getUTCMonth();
   const istDay = istNow.getUTCDate();
 
-  // Start time in IST -> convert to UTC
-  const startedAtUTC = new Date(Date.UTC(istYear, istMonth, istDay, state.repair_hour, state.repair_minute, 0, 0) - IST_OFFSET_MS);
-  const endedAtUTC = new Date(startedAtUTC.getTime() + durationMins * 60000);
+  const startedAtUTC = new Date(
+    Date.UTC(istYear, istMonth, istDay, startHour, startMin, 0, 0) - IST_OFFSET_MS,
+  );
+  let endedAtUTC = new Date(
+    Date.UTC(istYear, istMonth, istDay, endHour, endMin, 0, 0) - IST_OFFSET_MS,
+  );
+
+  // If end is before start, the activity crosses midnight
+  if (endedAtUTC.getTime() <= startedAtUTC.getTime()) {
+    endedAtUTC = new Date(endedAtUTC.getTime() + 24 * 3600000);
+  }
 
   const description = state.repair_description || null;
 
@@ -410,11 +366,13 @@ async function handleRepairDurationCallback(
     return;
   }
 
-  const startStr = `${state.repair_hour}:${state.repair_minute.toString().padStart(2, "0")}`;
-  const endHour = Math.floor((startedAtUTC.getTime() + durationMins * 60000 + IST_OFFSET_MS) / 3600000) % 24;
-  const endMin = Math.floor(((startedAtUTC.getTime() + durationMins * 60000 + IST_OFFSET_MS) % 3600000) / 60000);
+  const startStr = `${startHour}:${startMin.toString().padStart(2, "0")}`;
   const endStr = `${endHour}:${endMin.toString().padStart(2, "0")}`;
-  const durLabel = durationMins >= 60 ? `${(durationMins / 60).toFixed(durationMins % 60 ? 1 : 0)}h` : `${durationMins}m`;
+  const durationMs = endedAtUTC.getTime() - startedAtUTC.getTime();
+  const durationMin = Math.round(durationMs / 60000);
+  const durLabel = durationMin >= 60
+    ? `${(durationMin / 60).toFixed(durationMin % 60 ? 1 : 0)}h`
+    : `${durationMin}m`;
 
   await sendMessage(
     chatId,
@@ -510,13 +468,13 @@ async function handleTextMessage(chatId: number, telegramUserId: string, text: s
     }
 
     if (state.repair_mode) {
-      // Repair mode: save description, then ask for start time
+      // Repair mode: save description, then ask for timestamps
       await setUserState(telegramUserId, {
         awaiting_description: false,
-        repair_step: "select_hour",
+        repair_step: "awaiting_timestamps",
         repair_description: text,
       });
-      await sendMessage(chatId, `Description saved: "${text}"\nSelect start hour:`, buildHourKeyboard());
+      await sendMessage(chatId, `Description saved: "${text}"\n${TIMESTAMP_PROMPT}`);
     } else {
       // Normal mode: create session with description
       const activeSession = await getActiveSession(telegramUserId);
@@ -544,6 +502,9 @@ async function handleTextMessage(chatId: number, telegramUserId: string, text: s
       await clearUserState(telegramUserId);
       await sendStopKeyboard(chatId, activity.display_name);
     }
+  } else if (state.repair_mode && state.repair_step === "awaiting_timestamps") {
+    // Repair mode: user sent timestamp text
+    await handleRepairTimestamps(chatId, telegramUserId, text);
   } else {
     await sendMessage(chatId, "Please use activity buttons.");
   }
@@ -601,17 +562,6 @@ Deno.serve(async (req) => {
         await sendActivityKeyboard(chatId, false);
       } else if (data === "r_cancel") {
         await handleRepairCancel(chatId, telegramUserId, cq.id);
-      } else if (data.startsWith("r_hour:")) {
-        const hour = parseInt(data.slice("r_hour:".length), 10);
-        await handleRepairHourCallback(chatId, telegramUserId, hour, cq.id);
-      } else if (data.startsWith("r_min:")) {
-        const parts = data.slice("r_min:".length).split(":");
-        const hour = parseInt(parts[0], 10);
-        const minute = parseInt(parts[1], 10);
-        await handleRepairMinuteCallback(chatId, telegramUserId, hour, minute, cq.id);
-      } else if (data.startsWith("r_dur:")) {
-        const mins = parseInt(data.slice("r_dur:".length), 10);
-        await handleRepairDurationCallback(chatId, telegramUserId, mins, cq.id);
       } else if (data.startsWith("activity:")) {
         const activityCode = data.slice("activity:".length);
         const state = await getUserState(telegramUserId);
